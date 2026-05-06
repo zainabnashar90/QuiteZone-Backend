@@ -1,0 +1,11 @@
+# الحماية
+.env
+
+# مكتبات البرمجة (حجمها كبير ولا تُرفع)
+node_modules/
+
+# ملفات النظام واللوغات
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

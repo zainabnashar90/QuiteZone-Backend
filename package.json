@@ -1,0 +1,26 @@
+{
+  "name": "noisehunterserver",
+  "version": "1.0.0",
+  "description": "QuietZone Backend Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Zainab Nashar",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@tensorflow-models/speech-commands": "^0.5.4",
+    "@tensorflow/tfjs": "^4.22.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "expo-server-sdk": "^6.1.0",
+    "express": "^5.2.1",
+    "mongoose": "^9.4.1",
+    "node-fetch": "^2.7.0",
+    "node-geocoder": "^4.4.1",
+    "socket.io": "^4.8.3"
+  }
+}
