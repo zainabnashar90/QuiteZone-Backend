@@ -541,7 +541,6 @@ app.post('/api/magic-wand', async (req, res) => {
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
   
-    // جلب الأماكن الهادئة (مرتبة من الأحدث للأقدم)
     const quietPlaces = await Place.find({ noiseLevel: { $lte: 55 } }).sort({ updatedAt: -1 });  
   
     if (quietPlaces.length === 0) {  
@@ -561,28 +560,33 @@ app.post('/api/magic-wand', async (req, res) => {
       });  
     }  
   
-    // اختيار الأهدأ من بين الأماكن القريبة
     const bestPlace = nearbyPlaces.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];  
     const dist = calculateDistance(userLat, userLng, bestPlace.location.lat, bestPlace.location.lng);  
-      
-    const displayName = bestPlace.name || bestPlace.location?.address || ''; 
-    let shortName = "موقع غير مسمى";
 
-    if (displayName) {
-        let parts = displayName.split(/[،,]/).map(p => p.trim());
-        // نختار أول جزء نصي لا يبدأ برقم (لضمان أنه اسم حقيقي)
-        shortName = parts.find(p => isNaN(p.charAt(0)) && p.length > 2) || parts[0];
+    // ✅ الإصلاح: إذا الاسم المخزن إحداثيات، نعيد محاولة الـ geocoding
+    let displayName = bestPlace.name || bestPlace.location?.address || '';
+    const looksLikeCoords = !displayName || /^📍/.test(displayName) || /^\d/.test(displayName);
+    if (looksLikeCoords) {
+      displayName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
+      if (/^📍/.test(displayName) || /^\d/.test(displayName)) {
+        displayName = '';
+      }
     }
 
-    if (!isNaN(shortName.charAt(0))) {
-        shortName = "منطقة هادئة قريبة";
+    let shortName = "منطقة هادئة قريبة";
+    if (displayName) {
+        let parts = displayName.split(/[،,]/).map(p => p.trim());
+        const candidate = parts.find(p => isNaN(p.charAt(0)) && p.length > 2) || parts[0];
+        if (candidate && isNaN(candidate.charAt(0))) {
+          shortName = candidate;
+        }
     }
   
     res.json({   
       success: true,   
       message: `وجدتها! أهدأ منطقة قريبة منك هي: ${shortName}`,   
       bestRoute: {  
-        name: displayName,  
+        name: displayName || shortName,  // ✅ مش displayName الخام
         location: { lat: bestPlace.location.lat, lng: bestPlace.location.lng },  
         noiseLevel: bestPlace.noiseLevel,  
         updatedAt: bestPlace.updatedAt,  
