@@ -307,106 +307,95 @@ async function reverseGeocode(lat, lng) {
   }   
 }  
    
-// ==========================================   
-// 🔌 Socket.IO   
-// ==========================================   
+  
+// ==========================================    
+// 🔌 Socket.IO 
+// ==========================================    
 io.on('connection', async (socket) => {   
   console.log(`📱 اتصال جديد (ID: ${socket.id})`);   
-   
+    
   try {   
     const recentHistory = await Place.find().sort({ updatedAt: -1 }).limit(50);   
     socket.emit('update-history', recentHistory.map(item => ({   
       lat: item.location.lat,   
       lng: item.location.lng,   
       noiseLevel: item.noiseLevel,   
-      address: item.name || item.location?.address || 'موقع غير مسمى',  
+      address: item.name || item.location?.address || 'موقع غير مسمى',   
       time: item.updatedAt   
     })));   
   } catch (err) {   
     console.log('❌ فشل إرسال السجل الأولي:', err.message);   
   }   
-       
-   // استلام بيانات الضجيج من الموبايل وحفظها   
-socket.on('noise-data', async (data) => {   
-    const { lat, lng, noiseLevel, category } = data;   
-   
-    try {   
-        // 1. جلب اسم المنطقة الحقيقية باستخدام الدالة التي عدلناها   
-        const address = await reverseGeocode(lat, lng);   
-   
-        // 2. إنشاء سجل جديد في قاعدة البيانات (NoiseLog أو Place حسب اسم الموديل عندك)   
-        const newLog = new Place({   
-            name: address,   
-            location: {   
-                lat,   
-                lng,   
-                address: address // هنا سيتم تخزين اسم المنطقة الحقيقي   
-            },   
-            noiseLevel,   
-            category: category || 'عام',   
-            updatedAt: new Date()   
-        });   
-   
-        // 3. أمر الحفظ السحري في MongoDB Atlas   
-        await newLog.save();   
-        console.log(`✅ تم حفظ سجل جديد في: ${address}`);   
-   
-        // 4. تحديث جميع الأجهزة المتصلة فوراً (لتحديث العصا السحرية)   
-        io.emit('new-noise-entry', {   
-            lat,   
-            lng,   
-            noiseLevel,   
-            address,   
-            time: new Date()   
-        });   
-   
-    } catch (err) {   
-        console.log('❌ فشل حفظ السجل:', err.message);   
-    }   
-});   
- socket.on('register-device', async (data) => { 
-  const { pushToken, deviceName, lat, lng } = data; 
-
-
- 
-  if (pushToken && Expo.isExpoPushToken(pushToken)) { 
-      try {
-      const updateFields = { deviceName: deviceName || 'جهاز مجهول', lastActive: new Date() };
-      if (lat !== undefined && lng !== undefined) {
-        updateFields.lat = parseFloat(lat);
-        updateFields.lng = parseFloat(lng);
-        updateFields.lastLocationUpdate = new Date();
-      }
-      await Device.findOneAndUpdate( 
-        { pushToken: pushToken },  
-       updateFields,
-        { upsert: true, new: true } 
-      ); 
-      console.log(`✅ تم حفظ/تحديث التوكن في القاعدة: ${deviceName}`); 
-
-      
-      activeDevices.set(socket.id, { 
-        socketId: socket.id, 
-        pushToken, 
-      deviceName: deviceName || 'جهاز مجهول',
-        lat: updateFields.lat || null,
-        lng: updateFields.lng || null
-      });
-      io.emit('update-device-list', Array.from(activeDevices.values()));
-
-    } catch (err) { 
-      console.log('❌ خطأ في حفظ التوكن:', err.message); 
-    } 
-  } 
-}); 
-   
-  socket.on('disconnect', () => {   
-    activeDevices.delete(socket.id);   
-    console.log(`📴 انقطع الاتصال (ID: ${socket.id})`);   
-    io.emit('update-device-list', Array.from(activeDevices.values()));   
+        
+  // استلام بيانات الضجيج من الموبايل وحفظها   
+  socket.on('noise-data', async (data) => {   
+      const { lat, lng, noiseLevel, category } = data;   
+    
+      try {   
+          const address = await reverseGeocode(lat, lng);   
+    
+          const newLog = new Place({   
+              name: address,   
+              location: {   
+                  lat,   
+                  lng,   
+                  address: address 
+              },   
+              noiseLevel,   
+              category: category || 'عام',   
+              updatedAt: new Date()   
+          });   
+    
+          await newLog.save();   
+          console.log(`✅ تم حفظ سجل جديد في: ${address}`);   
+    
+          io.emit('new-noise-entry', {   
+              lat,   
+              lng,   
+              noiseLevel,   
+              address,   
+              time: new Date()   
+          });   
+    
+      } catch (err) {   
+          console.log('❌ فشل حفظ السجل:', err.message);   
+      }   
   });   
-});
-  // تحديث موقع الجهاز (يُرسَل دورياً من التطبيق)
+
+  socket.on('register-device', async (data) => { 
+    const { pushToken, deviceName, lat, lng } = data; 
+
+    if (pushToken && Expo.isExpoPushToken(pushToken)) { 
+        try {
+        const updateFields = { deviceName: deviceName || 'جهاز مجهول', lastActive: new Date() };
+        if (lat !== undefined && lng !== undefined) {
+          updateFields.lat = parseFloat(lat);
+          updateFields.lng = parseFloat(lng);
+          updateFields.lastLocationUpdate = new Date();
+        }
+        await Device.findOneAndUpdate( 
+          { pushToken: pushToken },  
+          updateFields,
+          { upsert: true, new: true } 
+        ); 
+        console.log(`✅ تم حفظ/تحديث التوكن في القاعدة: ${deviceName}`); 
+
+        activeDevices.set(socket.id, { 
+          socketId: socket.id, 
+          pushToken, 
+          deviceName: deviceName || 'جهاز مجهول',
+          lat: updateFields.lat || null,
+          lng: updateFields.lng || null
+        });
+        io.emit('update-device-list', Array.from(activeDevices.values()));
+
+      } catch (err) { 
+        console.log('❌ خطأ في حفظ التوكن:', err.message); 
+      } 
+    } 
+  }); 
+
+  // ✅ تم نقل هذا الجزء للداخل ليعمل بشكل صحيح
   socket.on('update-location', async (data) => {
     const { pushToken, lat, lng } = data;
     if (!pushToken || lat === undefined || lng === undefined) return;
@@ -424,7 +413,14 @@ socket.on('noise-data', async (data) => {
     } catch (err) {
       console.log('❌ خطأ في تحديث الموقع:', err.message);
     }
-  });    
+  });
+
+  socket.on('disconnect', () => {   
+    activeDevices.delete(socket.id);   
+    console.log(`📴 انقطع الاتصال (ID: ${socket.id})`);   
+    io.emit('update-device-list', Array.from(activeDevices.values()));   
+  });   
+}); // نهاية الـ io.on
    
 // ==========================================   
 // POST /api/analyze-audio   
