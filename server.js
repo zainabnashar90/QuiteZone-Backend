@@ -1,5 +1,6 @@
 require('dotenv').config();   
-const express = require('express');   
+const express = require('express');  
+const admin = require('firebase-admin'); 
 const fetch = require('node-fetch');   
 const mongoose = require('mongoose');   
 const cors = require('cors');   
@@ -65,10 +66,14 @@ const Place = mongoose.model('Place', new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }   
 }));   
   const DeviceSchema = new mongoose.Schema({ 
-  pushToken: { type: String, required: true, unique: true }, // التوكن فريد لكل جهاز 
-  deviceName: String, 
-  lastActive: { type: Date, default: Date.now } 
-}); 
+   pushToken: { type: String, required: true, unique: true },
+  deviceName: String,
+  lat: { type: Number, default: null },
+  lng: { type: Number, default: null },
+  lastLocationUpdate: { type: Date, default: null },
+  lastActive: { type: Date, default: Date.now }
+});  
+
  
 const Device = mongoose.model('Device', DeviceSchema); 
 const activeDevices = new Map();   
@@ -78,6 +83,22 @@ const activeDevices = new Map();
 const lastPushSentTime = new Map();   
 const PUSH_COOLDOWN_MS = 60000;   
    
+// ==========================================   
+// 🔥 Firebase Admin Setup
+// ==========================================   
+try {
+   
+    const serviceAccount = require("./firebase-admin-sdk.json"); 
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+
+    console.log("✅ Firebase Admin SDK: Connected (Project: " + serviceAccount.project_id + ")");
+} catch (error) {
+    console.error("❌ Firebase Admin Init Error: تأكد من وجود ملف firebase-admin-sdk.json في نفس المجلد");
+    console.error(error.message);
+}
 // ==========================================   
 // 🔔 إرسال Push Notification   
 // ==========================================   
@@ -134,8 +155,8 @@ async function sendMultiplePushNotifications(notifications) {
   }
   return sentCount;
 }
+async function broadcastNotification(title, body, data = {}, excludeToken = null, sourceLat = null, sourceLng = null, radiusKm = 0.3) {
 
-async function broadcastNotification(title, body, data = {}, excludeToken = null) {
   const now = Date.now();
   const notificationsToSend = [];
 
@@ -147,7 +168,13 @@ async function broadcastNotification(title, body, data = {}, excludeToken = null
 
       const lastSent = lastPushSentTime.get(token) || 0;
       if (now - lastSent < PUSH_COOLDOWN_MS) continue;
-
+       
+      // تصفية بالموقع: إذا عندنا موقع المصدر وموقع الجهاز، نرسل فقط للأجهزة القريبة
+      if (sourceLat !== null && sourceLng !== null) {
+        if (device.lat === null || device.lng === null) continue; // جهاز بدون موقع لا يوصله الإشعار
+        const dist = calculateDistance(sourceLat, sourceLng, device.lat, device.lng);
+        if (parseFloat(dist) > radiusKm) continue;
+      }
       lastPushSentTime.set(token, now);
       notificationsToSend.push({ to: token, title, body, data });
     }
@@ -338,23 +365,32 @@ socket.on('noise-data', async (data) => {
     }   
 });   
  socket.on('register-device', async (data) => { 
-  const { pushToken, deviceName } = data; 
+  const { pushToken, deviceName, lat, lng } = data; 
+
+
  
   if (pushToken && Expo.isExpoPushToken(pushToken)) { 
-    try { 
-      // تحديث الجهاز إذا كان موجوداً أو إنشاؤه إذا كان جديداً (upsert) 
+      try {
+      const updateFields = { deviceName: deviceName || 'جهاز مجهول', lastActive: new Date() };
+      if (lat !== undefined && lng !== undefined) {
+        updateFields.lat = parseFloat(lat);
+        updateFields.lng = parseFloat(lng);
+        updateFields.lastLocationUpdate = new Date();
+      }
       await Device.findOneAndUpdate( 
         { pushToken: pushToken },  
-        { deviceName: deviceName || 'جهاز مجهول', lastActive: new Date() }, 
+       updateFields,
         { upsert: true, new: true } 
       ); 
       console.log(`✅ تم حفظ/تحديث التوكن في القاعدة: ${deviceName}`); 
 
-      // ✅ تحديث قائمة الأجهزة النشطة
+      
       activeDevices.set(socket.id, { 
         socketId: socket.id, 
         pushToken, 
-        deviceName: deviceName || 'جهاز مجهول' 
+      deviceName: deviceName || 'جهاز مجهول',
+        lat: updateFields.lat || null,
+        lng: updateFields.lng || null
       });
       io.emit('update-device-list', Array.from(activeDevices.values()));
 
@@ -369,7 +405,26 @@ socket.on('noise-data', async (data) => {
     console.log(`📴 انقطع الاتصال (ID: ${socket.id})`);   
     io.emit('update-device-list', Array.from(activeDevices.values()));   
   });   
-});   
+});
+  // تحديث موقع الجهاز (يُرسَل دورياً من التطبيق)
+  socket.on('update-location', async (data) => {
+    const { pushToken, lat, lng } = data;
+    if (!pushToken || lat === undefined || lng === undefined) return;
+    try {
+      await Device.findOneAndUpdate(
+        { pushToken },
+        { lat: parseFloat(lat), lng: parseFloat(lng), lastLocationUpdate: new Date(), lastActive: new Date() }
+      );
+      const device = activeDevices.get(socket.id);
+      if (device) {
+        device.lat = parseFloat(lat);
+        device.lng = parseFloat(lng);
+        activeDevices.set(socket.id, device);
+      }
+    } catch (err) {
+      console.log('❌ خطأ في تحديث الموقع:', err.message);
+    }
+  });    
    
 // ==========================================   
 // POST /api/analyze-audio   
@@ -429,12 +484,12 @@ app.post('/api/analyze-audio', async (req, res) => {
         }   
       }   
    
-      // ✅ FIX 2: broadcast للأجهزة الأخرى فقط (excludeToken يمنع الإرسال المزدوج)   
+     // broadcast للأجهزة القريبة فقط (ضمن 300 متر من مصدر الضجيج) 
       await broadcastNotification(title, body, {    
         type: 'NOISE_ALERT',    
         lat: location.lat,    
         lng: location.lng    
-      }, pushToken);   
+      }, pushToken, location.lat, location.lng, 0.3);    
    
       io.emit('collective-noise-alert', { location, noiseLevel, noiseType: detectedType, address });   
     }   
