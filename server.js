@@ -503,18 +503,18 @@ app.get('/api/stats', async (req, res) => {
   try {   
     // 1. جلب البيانات من الأحدث للأقدم   
     const history = await Place.find().sort({ updatedAt: -1 }).limit(50);   
-       
+        
     // 2. تحويل البيانات لشكل يفهمه التطبيق (Mapping)   
     const formattedHistory = history.map(item => ({   
       id: item._id.toString(),   
       noiseLevel: item.noiseLevel || 0,   
-      noiseType: category || aiSource || 'غير مصنف',
+      // ✅ التعديل هنا: نأخذ القيم من item المسحوب من القاعدة
+      noiseType: item.category || item.noiseType || 'غير مصنف',
       time: item.updatedAt,   
-      // تأكد من جلب الاسم سواء كان في الحقل الرئيسي أو داخل location   
       name: item.name || item.location?.address || 'موقع غير مسمى'   
     }));   
-   
-    // 3. حساب الملخص (باستخدام aggregation pipeline لزيادة الكفاءة)
+    
+    // 3. حساب الملخص (الذي يظهر في الكروت بالأعلى)
     const summaryData = await Place.aggregate([
       {
         $group: {
@@ -538,11 +538,11 @@ app.get('/api/stats', async (req, res) => {
       summary.avgNoiseLevel = Math.round(summaryData[0].avgNoiseLevel || 0);
       summary.maxNoiseLevel = summaryData[0].maxNoiseLevel || 0;
 
-      // جلب اسم المكان صاحب أعلى مستوى ضجيج
+      // جلب اسم المكان صاحب أعلى مستوى ضجيج لعرضه في الإحصائيات
       const maxPlace = await Place.findOne({ noiseLevel: summary.maxNoiseLevel }).select('name location');
-      summary.maxNoiseName = maxPlace?.name || maxPlace?.location?.address || '';
+      summary.maxNoiseName = maxPlace?.name || maxPlace?.location?.address || 'غير محدد';
     }
-   
+    
     res.json({   
       success: true,   
       history: formattedHistory, 
@@ -552,8 +552,7 @@ app.get('/api/stats', async (req, res) => {
     console.error("Stats Error:", err);   
     res.status(500).json({ success: false, error: err.message });   
   }   
-});   
-   
+});
 // ==========================================   
 // GET /api/heatmap   
 // ==========================================   
