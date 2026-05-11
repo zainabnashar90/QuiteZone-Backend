@@ -719,3 +719,35 @@ app.post('/api/test-notification', async (req, res) => {
   const success = await sendPushNotification(pushToken, '🧪 اختبار', 'يجب أن يظهر هذا الإشعار فوراً!', { test: true });   
   res.json({ success });   
 }); 
+// ==========================================
+// POST /api/broadcast-alert
+// ==========================================
+app.post('/api/broadcast-alert', async (req, res) => {
+  try {
+    const { pushToken, noiseLevel, lat, lng, category } = req.body;
+
+    if (!lat || !lng || noiseLevel === undefined) {
+      return res.status(400).json({ success: false, error: 'بيانات غير مكتملة' });
+    }
+
+    const title = '⚠️ تنبيه ضجيج قريب منك!';
+    const body = `رُصد ضجيج (${category || 'مرتفع'}) بمستوى ${noiseLevel} dB على بعد أقل من 300 متر منك`;
+
+    const sentCount = await broadcastNotification(
+      title,
+      body,
+      { type: 'NEARBY_NOISE_ALERT', noiseLevel, lat, lng },
+      pushToken,
+      parseFloat(lat),
+      parseFloat(lng),
+      0.3
+    );
+
+    console.log(`📡 تم إرسال إشعار البث لـ ${sentCount} جهاز قريب`);
+    res.json({ success: true, sentCount });
+
+  } catch (err) {
+    console.error('❌ broadcast-alert error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
