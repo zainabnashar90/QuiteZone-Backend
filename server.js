@@ -369,39 +369,48 @@ io.on('connection', async (socket) => {
       }   
   });   
 
-  socket.on('register-device', async (data) => { 
-    const { pushToken, deviceName, lat, lng } = data; 
+socket.on('register-device', async (data) => { 
+    // 1. تفكيك البيانات القادمة من الموبايل
+    const { pushToken, deviceName, lat, lng, noiseLevel } = data; 
 
-    if (pushToken && Expo.isExpoPushToken(pushToken)) { 
-        try {
-        const updateFields = { deviceName: deviceName || 'جهاز مجهول', lastActive: new Date() };
+    try {
+        const updateFields = { 
+            deviceName: deviceName || 'جهاز مجهول', 
+            lastActive: new Date() 
+        };
+
         if (lat !== undefined && lng !== undefined) {
-          updateFields.lat = parseFloat(lat);
-          updateFields.lng = parseFloat(lng);
-          updateFields.lastLocationUpdate = new Date();
+            updateFields.lat = parseFloat(lat);
+            updateFields.lng = parseFloat(lng);
+            updateFields.lastLocationUpdate = new Date();
         }
-        await Device.findOneAndUpdate( 
-          { pushToken: pushToken },  
-          updateFields,
-          { upsert: true, new: true } 
-        ); 
-        console.log(`✅ تم حفظ/تحديث التوكن في القاعدة: ${deviceName}`); 
 
+        // 2. تحديث قاعدة البيانات (لإرسال الإشعارات لاحقاً)
+        if (pushToken && Expo.isExpoPushToken(pushToken)) {
+            await Device.findOneAndUpdate( 
+                { pushToken: pushToken },  
+                updateFields,
+                { upsert: true, new: true } 
+            ); 
+        }
+
+        // 3. إضافة الجهاز لقائمة الرادار "النشط" في الذاكرة
         activeDevices.set(socket.id, { 
-          socketId: socket.id, 
-          pushToken, 
-          deviceName: deviceName || 'جهاز مجهول',
-          lat: updateFields.lat || null,
-          lng: updateFields.lng || null
+            socketId: socket.id, 
+            pushToken: pushToken || null, 
+            deviceName: deviceName || 'جهاز مجهول',
+            lat: updateFields.lat || null,
+            lng: updateFields.lng || null,
+            noiseLevel: noiseLevel || 0 // القيمة التي ستظهر بجانب الاسم في الرادار
         });
+
+        // 4. إرسال التحديث لكل المتصلين (ليروا الجهاز الجديد والـ dB الخاص به)
         io.emit('update-device-list', Array.from(activeDevices.values()));
 
-      } catch (err) { 
-        console.log('❌ خطأ في حفظ التوكن:', err.message); 
-      } 
+    } catch (err) { 
+        console.log('❌ خطأ في تسجيل الجهاز:', err.message); 
     } 
-  }); 
-
+});
   // ✅ تم نقل هذا الجزء للداخل ليعمل بشكل صحيح
   socket.on('update-location', async (data) => {
     const { pushToken, lat, lng } = data;
@@ -427,6 +436,17 @@ io.on('connection', async (socket) => {
     console.log(`📴 انقطع الاتصال (ID: ${socket.id})`);   
     io.emit('update-device-list', Array.from(activeDevices.values()));   
   });   
+  socket.on('update-noise-level', (data) => {
+    const { noiseLevel } = data;
+    const device = activeDevices.get(socket.id);
+    if (device) {
+        device.noiseLevel = noiseLevel;
+        activeDevices.set(socket.id, device);
+        
+        // إرسال التحديث للجميع ليتغير الرقم في الرادار فوراً
+        io.emit('update-device-list', Array.from(activeDevices.values()));
+    }
+});
 }); // نهاية الـ io.on
    
 // ==========================================   
