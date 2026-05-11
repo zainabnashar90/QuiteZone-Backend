@@ -508,7 +508,7 @@ app.get('/api/stats', async (req, res) => {
     const formattedHistory = history.map(item => ({   
       id: item._id.toString(),   
       noiseLevel: item.noiseLevel || 0,   
-      noiseType: item.noiseType || item.category || 'غير مصنف',   
+      noiseType: category || aiSource || 'غير مصنف',
       time: item.updatedAt,   
       // تأكد من جلب الاسم سواء كان في الحقل الرئيسي أو داخل location   
       name: item.name || item.location?.address || 'موقع غير مسمى'   
@@ -576,9 +576,9 @@ app.get('/api/heatmap', async (req, res) => {
 app.get('/api/devices', (req, res) => {   
   res.json({ success: true, devices: Array.from(activeDevices.values()) });   
 });   
-   
+    
 // ==========================================  
-// POST /api/magic-wand  
+// POST /api/magic-wand - خوارزمية أهدأ منطقة (نسخة الأطروحة النهائية)
 // ==========================================  
 app.post('/api/magic-wand', async (req, res) => {  
   try {  
@@ -592,62 +592,61 @@ app.post('/api/magic-wand', async (req, res) => {
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
   
-    const quietPlaces = await Place.find({ noiseLevel: { $lte: 55 } }).sort({ updatedAt: -1 });  
+    // 1. جلب كل المناطق الهادئة فعلياً من القاعدة
+    const quietPlaces = await Place.find({ noiseLevel: { $lte: 55 } });  
   
     if (quietPlaces.length === 0) {  
       return res.json({ success: false, message: 'لا توجد مناطق هادئة مرصودة حالياً.' });  
     }  
   
-    const nearbyPlaces = quietPlaces.filter(place => {  
-      const distance = calculateDistance(userLat, userLng, place.location.lat, place.location.lng);  
-      return distance <= searchRadius;   
-    });  
+    // 2. فلترة الأماكن القريبة وحساب المسافة بدقة
+    const nearbyPlaces = quietPlaces.map(place => {
+      const d = calculateDistance(userLat, userLng, place.location.lat, place.location.lng);
+      return { ...place._doc, distance: d };
+    }).filter(p => p.distance <= searchRadius);
   
     if (nearbyPlaces.length === 0) {  
-      const modeText = searchRadius <= 2 ? "مشياً" : "بالسيارة";  
-      return res.json({ 
-        success: false, 
-        message: `لم نجد أماكن هادئة في محيطك ${modeText}. جرب وسيلة أخرى!` 
-      });  
+      return res.json({ success: false, message: `لا يوجد هدوء ضمن نطاق ${searchRadius} كم.` });  
     }  
   
+    // 3. اختيار الأهدأ (الأقل ديسيبل) من بين القريبين
     const bestPlace = nearbyPlaces.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];  
-    const dist = calculateDistance(userLat, userLng, bestPlace.location.lat, bestPlace.location.lng);  
 
-    // ✅ الإصلاح: إذا الاسم المخزن إحداثيات، نعيد محاولة الـ geocoding
-    let displayName = bestPlace.name || bestPlace.location?.address || '';
-    const looksLikeCoords = !displayName || /^📍/.test(displayName) || /^\d/.test(displayName);
-    if (looksLikeCoords) {
-      displayName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
-      if (/^📍/.test(displayName) || /^\d/.test(displayName)) {
-        displayName = '';
-      }
+    // 4. خوارزمية جلب "اسم المنطقة الحقيقي" (Geocoding)
+    // نعتمد على الإحداثيات لجلب الاسم من API الخرائط مباشرة لضمان عدم وجود أرقام
+    let realName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
+    
+    // تنظيف الاسم (نأخذ اسم الحي أو الشارع فقط ونبعد عن الأرقام)
+    let finalAreaName = "منطقة هادئة قريبة";
+    if (realName && !realName.includes("📍")) {
+        let parts = realName.split(/[،,]/).map(p => p.trim());
+        // نختار أول كلمة نصية طولها أكثر من 3 حروف (عشان نتجنب أرقام الشوارع)
+        finalAreaName = parts.find(p => isNaN(p.charAt(0)) && p.length > 3) || parts[0];
     }
 
-    let shortName = "منطقة هادئة قريبة";
-    if (displayName) {
-        let parts = displayName.split(/[،,]/).map(p => p.trim());
-        const candidate = parts.find(p => isNaN(p.charAt(0)) && p.length > 2) || parts[0];
-        if (candidate && isNaN(candidate.charAt(0))) {
-          shortName = candidate;
-        }
-    }
-  
+    // 5. تجهيز "رصد في" والتوقيت
+    const timeFormatted = new Date(bestPlace.updatedAt).toLocaleTimeString('ar-SY', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+    });
+    const dateFormatted = new Date(bestPlace.updatedAt).toLocaleDateString('ar-SY');
+
+    // 6. النتيجة النهائية بالصيغة المطلوبة تماماً
     res.json({   
       success: true,   
-      message: `وجدتها! أهدأ منطقة قريبة منك هي: ${shortName}`,   
+      message: `وجدتها! أهدأ منطقة هي ${finalAreaName}`,   
       bestRoute: {  
-        name: displayName || shortName,  // ✅ مش displayName الخام
-        location: { lat: bestPlace.location.lat, lng: bestPlace.location.lng },  
-        noiseLevel: bestPlace.noiseLevel,  
-        updatedAt: bestPlace.updatedAt,  
-        distance: parseFloat(dist)  
+        name: finalAreaName, 
+        noiseLevel: bestPlace.noiseLevel,
+        distance: bestPlace.distance.toFixed(2), // المسافة بالكيلومتر
+        observedIn: `رصد في: ${dateFormatted}`,
+        time: `الساعة: ${timeFormatted}`,
+        location: { lat: bestPlace.location.lat, lng: bestPlace.location.lng }
       }   
     });  
   
   } catch (err) {  
-    console.log('❌ Magic-wand error:', err.message);  
-    res.status(500).json({ success: false, message: 'حدث خطأ في تحليل البيانات.' });  
+    res.status(500).json({ success: false, message: 'حدث خطأ في الخوارزمية.' });  
   }  
 });
 // ==========================================   
