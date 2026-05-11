@@ -257,19 +257,26 @@ function classifyNoise(noiseLevel, audioFeatures = [], aiSource = null) {
     }   
     avgChange = totalChange / (audioFeatures.length - 1);   
   }   
-   
+    
+  // تحقق مما إذا كان الذكاء الاصطناعي متأكد فعلاً من وجود صراخ
   const isAiEmergency = aiSource && (aiSource.includes('إنذار') || aiSource.includes('صراخ'));   
-     
-  if (noiseLevel > 85 && (avgChange > 15 || isAiEmergency))   
+      
+  // 1. حالة الطوارئ القصوى: صراخ فعلي مع ديسيبل عالي جداً
+  if (noiseLevel > 90 && (avgChange > 20 || isAiEmergency))   
     return { detectedType: 'صراخ / إنذار 🚨', isEmergency: true };   
-  if (noiseLevel > 90)   
+
+  // 2. ضجيج مستمر مزعج جداً (مثل الحفلات أو الأشغال)
+  if (noiseLevel > 95)   
     return { detectedType: 'ضجيج خطير ⚠️', isEmergency: true };   
-  if (noiseLevel > 75)   
+
+  // 3. الضجيج الذي يستحق إرسال إشعار (رفعنا الحد من 75 إلى 85)
+  // تم إضافة شرط إضافي (aiSource) لضمان أن الصوت ليس مجرد "نويز" عشوائي
+  if (noiseLevel > 85 && aiSource && aiSource !== 'هدوء نسبي 🌿')   
     return { detectedType: aiSource || 'ضجيج مرتفع 🔊', isEmergency: true };   
-   
-  return { detectedType: 'هدوء نسبي 🌿', isEmergency: false };   
-}   
-   
+    
+  // أي شيء أقل من ذلك يعتبر هدوء ولن يرسل إشعاراً (isEmergency: false)
+  return { detectedType: aiSource || 'هدوء نسبي 🌿', isEmergency: false };   
+}
 // ==========================================   
 // 📏 المسافة بين نقطتين (Haversine)   
 // ==========================================   
@@ -428,20 +435,22 @@ io.on('connection', async (socket) => {
 app.post('/api/analyze-audio', async (req, res) => {   
   try {   
     const { location, noiseLevel, audioFeatures, isMuted, pushToken, rawAudio } = req.body;   
-   
+    
     if (!location?.lat || !location?.lng || noiseLevel === undefined) {   
       return res.status(400).json({ success: false, error: 'بيانات غير مكتملة' });   
     }   
-   
+    
     let aiSource = '';   
     if (rawAudio && rawAudio.length > 100) {   
       aiSource = await getAIClassification(rawAudio);   
     }   
-       
+        
+    // هنا يتم تحديد ما إذا كان الموقف يتطلب "إنذار" (Emergency) بناءً على الديسيبل والنوع
     const { detectedType, isEmergency } = classifyNoise(noiseLevel, audioFeatures || [], aiSource);   
     const address = await reverseGeocode(location.lat, location.lng);   
     const finalNoiseType = aiSource || detectedType;   
-       
+        
+    // حفظ السجل دائماً في القاعدة للتوثيق (حتى لو كان هادئاً)
     const newRecord = new Place({   
       name: address,    
       location,    
@@ -452,7 +461,8 @@ app.post('/api/analyze-audio', async (req, res) => {
       updatedAt: new Date()    
     });   
     await newRecord.save();   
-       
+        
+    // تحديث الخريطة والسجلات لحظياً عبر Socket.io
     const updatedHistory = await Place.find().sort({ updatedAt: -1 }).limit(50);   
     io.emit('update-history', updatedHistory.map(p => ({   
       lat: p.location.lat, lng: p.location.lng,   
@@ -460,13 +470,15 @@ app.post('/api/analyze-audio', async (req, res) => {
       address: p.name || p.location?.address || 'موقع غير مسمى',  
       time: p.updatedAt   
     })));   
-       
+        
+    // 🔔 منطق الإشعارات المشروط:
+    // لن يدخل هنا إلا إذا كانت isEmergency تساوي true (أي ضجيج مرتفع أو صراخ)
     if (isEmergency && !isMuted) {   
       const title = "🤫 يرجى الهدوء - QuietZone";   
       const body = `رصدنا ضجيجاً بمستوى ${noiseLevel} dB في ${address.split(',')[0]}. لطفاً، حافظ على سكينة المكان 🌿`;   
       const now = Date.now();   
-   
-      // ✅ FIX 2+3: إرسال للجهاز المرسل مع cooldown (مرة كل دقيقة)   
+    
+      // 1. إرسال لصاحب الجهاز نفسه (تنبيه شخصي) مع منع التكرار (Cooldown)
       if (pushToken && Expo.isExpoPushToken(pushToken)) {   
         const lastSent = lastPushSentTime.get(pushToken) || 0;   
         if (now - lastSent >= PUSH_COOLDOWN_MS) {   
@@ -479,23 +491,25 @@ app.post('/api/analyze-audio', async (req, res) => {
           });   
         }   
       }   
-   
-     // broadcast للأجهزة القريبة فقط (ضمن 300 متر من مصدر الضجيج) 
+    
+      // 2. إرسال للأجهزة القريبة (بث جماعي) - فقط عند الضجيج
       await broadcastNotification(title, body, {    
         type: 'NOISE_ALERT',    
         lat: location.lat,    
         lng: location.lng    
       }, pushToken, location.lat, location.lng, 0.3);    
-   
+    
       io.emit('collective-noise-alert', { location, noiseLevel, noiseType: detectedType, address });   
+    } else {
+      // رسالة اختيارية في الـ console للتأكد من أن السيرفر يعمل لكنه لا يرسل إشعارات
+      console.log(`🌿 المنطقة هادئة (${noiseLevel} dB)، لا داعي لإرسال إشعار.`);
     }   
-   
+    
     res.json({ success: true, detectedType: finalNoiseType, isAlert: isEmergency, address });   
   } catch (err) {   
     res.status(500).json({ success: false, error: err.message });   
   }   
-});   
-   
+});
 // ==========================================   
 // GET /api/stats   
 // ==========================================   
