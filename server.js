@@ -579,10 +579,14 @@ app.get('/api/devices', (req, res) => {
 // ==========================================  
 // POST /api/magic-wand - خوارزمية أهدأ منطقة (نسخة الأطروحة النهائية)
 // ==========================================  
+// ==========================================  
+// POST /api/magic-wand - خوارزمية أهدأ منطقة (نسخة محسنة)
+// ==========================================  
 app.post('/api/magic-wand', async (req, res) => {  
   try {  
     const { latitude, longitude, maxDistance } = req.body;  
-    const searchRadius = maxDistance ? parseFloat(maxDistance) : 5;  
+    // 10 كم كحد افتراضي لضمان ظهور نتائج أثناء التجربة
+    const searchRadius = maxDistance ? parseFloat(maxDistance) : 10;  
   
     if (!latitude || !longitude) {  
       return res.json({ success: false, message: 'الموقع الجغرافي غير متوفر.' });  
@@ -591,54 +595,50 @@ app.post('/api/magic-wand', async (req, res) => {
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
   
-    // 1. جلب كل المناطق الهادئة فعلياً من القاعدة
-    const quietPlaces = await Place.find({ noiseLevel: { $lte: 55 } });  
+    // 1. جلب المناطق الهادئة (رفعنا الحد لـ 65 ديسيبل ليكون البحث مرناً)
+    const quietPlaces = await Place.find({ noiseLevel: { $lte: 65 } });  
   
     if (quietPlaces.length === 0) {  
-      return res.json({ success: false, message: 'لا توجد مناطق هادئة مرصودة حالياً.' });  
+      return res.json({ success: false, message: 'لا توجد تسجيلات لهدوء في قاعدة البيانات حالياً.' });  
     }  
   
     // 2. فلترة الأماكن القريبة وحساب المسافة بدقة
     const nearbyPlaces = quietPlaces.map(place => {
       const d = calculateDistance(userLat, userLng, place.location.lat, place.location.lng);
-      return { ...place._doc, distance: d };
+      return { ...place._doc, distance: parseFloat(d) };
     }).filter(p => p.distance <= searchRadius);
   
     if (nearbyPlaces.length === 0) {  
-      return res.json({ success: false, message: `لا يوجد هدوء ضمن نطاق ${searchRadius} كم.` });  
+      return res.json({ success: false, message: `لا يوجد هدوء مرصود ضمن نطاق ${searchRadius} كم.` });  
     }  
   
     // 3. اختيار الأهدأ (الأقل ديسيبل) من بين القريبين
     const bestPlace = nearbyPlaces.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];  
 
-    // 4. خوارزمية جلب "اسم المنطقة الحقيقي" (Geocoding)
-    // نعتمد على الإحداثيات لجلب الاسم من API الخرائط مباشرة لضمان عدم وجود أرقام
+    // 4. جلب الاسم الحقيقي وتحسينه
     let realName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
+    let finalAreaName = "منطقة هادئة";
     
-    // تنظيف الاسم (نأخذ اسم الحي أو الشارع فقط ونبعد عن الأرقام)
-    let finalAreaName = "منطقة هادئة قريبة";
     if (realName && !realName.includes("📍")) {
         let parts = realName.split(/[،,]/).map(p => p.trim());
-        // نختار أول كلمة نصية طولها أكثر من 3 حروف (عشان نتجنب أرقام الشوارع)
+        // نختار أول جزء نصي يعبر عن اسم المكان
         finalAreaName = parts.find(p => isNaN(p.charAt(0)) && p.length > 3) || parts[0];
     }
 
-    // 5. تجهيز "رصد في" والتوقيت
+    // 5. التنسيق الزمني
     const timeFormatted = new Date(bestPlace.updatedAt).toLocaleTimeString('ar-SY', { 
         hour: '2-digit', 
         minute: '2-digit' 
     });
-    const dateFormatted = new Date(bestPlace.updatedAt).toLocaleDateString('ar-SY');
 
-    // 6. النتيجة النهائية بالصيغة المطلوبة تماماً
     res.json({   
       success: true,   
       message: `وجدتها! أهدأ منطقة هي ${finalAreaName}`,   
       bestRoute: {  
         name: finalAreaName, 
         noiseLevel: bestPlace.noiseLevel,
-        distance: bestPlace.distance.toFixed(2), // المسافة بالكيلومتر
-        observedIn: `رصد في: ${dateFormatted}`,
+        distance: bestPlace.distance.toFixed(2),
+        observedIn: `رصد في: ${new Date(bestPlace.updatedAt).toLocaleDateString('ar-SY')}`,
         time: `الساعة: ${timeFormatted}`,
         location: { lat: bestPlace.location.lat, lng: bestPlace.location.lng }
       }   
@@ -648,25 +648,6 @@ app.post('/api/magic-wand', async (req, res) => {
     res.status(500).json({ success: false, message: 'حدث خطأ في الخوارزمية.' });  
   }  
 });
-// ==========================================   
-// POST /api/send-notification   
-// ==========================================   
-app.post('/api/send-notification', async (req, res) => {   
-  try {   
-    const { title, body, data, targetSocketId } = req.body;   
-    if (targetSocketId && activeDevices.has(targetSocketId)) {   
-      const device = activeDevices.get(targetSocketId);   
-      if (device.pushToken) {   
-        await sendPushNotification(device.pushToken, title, body, data || {});   
-        return res.json({ success: true, message: 'تم الإرسال للجهاز المستهدف' });   
-      }   
-    }   
-    const sentCount = await broadcastNotification(title, body, data || {});   
-    res.json({ success: true, message: `تم الإرسال إلى ${sentCount} جهاز` });   
-  } catch (err) {   
-    res.status(500).json({ success: false, error: err.message });   
-  }   
-});   
    
 // ==========================================   
 // POST /api/places   
