@@ -382,18 +382,25 @@ socket.on('register-device', async (data) => {
             updateFields.lastLocationUpdate = new Date();
         }
 
-        // ✅ التعديل: الحفظ في قاعدة البيانات بناءً على الـ PushToken 
-        // إذا لم يوجد توكن، نستخدم معرف السوكيت مؤقتاً أو نكتفي بالتحديث في الذاكرة
+        // 1. التحديث في قاعدة البيانات (MongoDB)
         if (pushToken) {
             await Device.findOneAndUpdate( 
-                { pushToken: pushToken },   // البحث بالتوكن
+                { pushToken: pushToken },
                 updateFields,
-                { upsert: true, new: true } // إذا لم يجد الجهاز، يقوم بإنشائه (Upsert)
+                { upsert: true, new: true }
             ); 
             console.log(`💾 Device updated in MongoDB: ${deviceName}`);
+
+            // 2. 🔥 الحل لمنع التكرار في الرادار (Map):
+            // ابحثي عن أي جلسة سوكيت قديمة مرتبطة بنفس الـ pushToken واحذفيها
+            for (let [id, device] of activeDevices.entries()) {
+                if (device.pushToken === pushToken) {
+                    activeDevices.delete(id);
+                }
+            }
         }
 
-        // 3. إضافة الجهاز لقائمة الرادار النشط (دائماً)
+        // 3. إضافة الجلسة الحالية فقط للقائمة النشطة
         activeDevices.set(socket.id, { 
             socketId: socket.id, 
             pushToken: pushToken || null, 
@@ -403,7 +410,7 @@ socket.on('register-device', async (data) => {
             noiseLevel: noiseLevel || 0 
         });
 
-        // 4. تحديث جميع المستخدمين
+        // 4. إرسال القائمة المحدثة (بدون تكرار) للجميع
         io.emit('update-device-list', Array.from(activeDevices.values()));
 
     } catch (err) { 
