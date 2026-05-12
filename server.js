@@ -65,14 +65,18 @@ const Place = mongoose.model('Place', new mongoose.Schema({
   isAlert: { type: Boolean, default: false },   
   updatedAt: { type: Date, default: Date.now }   
 }));   
-  const DeviceSchema = new mongoose.Schema({ 
-   pushToken: { type: String },
-  deviceName: String,
+ const DeviceSchema = new mongoose.Schema({ 
+  // اجعله اختيارياً وليس فريداً إذا كان احتمال الـ null وارداً
+  pushToken: { type: String, default: null }, 
+  
+  // اجعل اسم الجهاز هو المطلوب لتميز الأجهزة في لوحة التحكم
+  deviceName: { type: String, required: true }, 
+  
   lat: { type: Number, default: null },
   lng: { type: Number, default: null },
   lastLocationUpdate: { type: Date, default: null },
   lastActive: { type: Date, default: Date.now }
-});  
+}); 
 
  
 const Device = mongoose.model('Device', DeviceSchema); 
@@ -368,15 +372,14 @@ io.on('connection', async (socket) => {
   });   
 
 socket.on('register-device', async (data) => { 
-    // أضيفي هذا السطر للتأكد من وصول التوكن للسيرفر
     console.log("📥 Received registration data:", data);
-
     const { pushToken, deviceName, lat, lng, noiseLevel } = data; 
 
     try {
         const updateFields = { 
             deviceName: deviceName || 'جهاز مجهول', 
-            lastActive: new Date() 
+            lastActive: new Date(),
+            pushToken: pushToken || null // حفظ التوكن لو وجد
         };
 
         if (lat !== undefined && lng !== undefined) {
@@ -385,25 +388,20 @@ socket.on('register-device', async (data) => {
             updateFields.lastLocationUpdate = new Date();
         }
 
-        // 🚨 التصحيح الأهم: التأكد من وجود توكن قبل محاولة الحفظ
-        if (pushToken) {
-            const savedDevice = await Device.findOneAndUpdate( 
-                { pushToken: pushToken },
-                updateFields,
-                { upsert: true, new: true, setDefaultsOnInsert: true } 
-            ); 
-            console.log(`💾 Device saved/updated in MongoDB: ${savedDevice.deviceName}`);
-        } else {
-            console.log("⚠️ No pushToken provided, device only added to active list (Memory)");
-        }
+        // ✅ التعديل: البحث عن الجهاز باسمه (أو ID) بدل التوكن فقط
+        // هيك حتى لو التوكن null، الجهاز رح ينحفظ
+        const savedDevice = await Device.findOneAndUpdate( 
+            { deviceName: deviceName }, // البحث بالاسم (أو Unique ID لو عندك)
+            updateFields,
+            { upsert: true, new: true, setDefaultsOnInsert: true } 
+        ); 
+        
+        console.log(`💾 Device saved/updated in MongoDB: ${savedDevice.deviceName}`);
 
-        // تحديث قائمة الرادار (الذاكرة)
+        // تحديث الذاكرة المؤقتة (للرادار)
         activeDevices.set(socket.id, { 
             socketId: socket.id, 
-            pushToken: pushToken || null, 
-            deviceName: deviceName || 'جهاز مجهول',
-            lat: updateFields.lat || null,
-            lng: updateFields.lng || null,
+            ...updateFields,
             noiseLevel: noiseLevel || 0 
         });
 
