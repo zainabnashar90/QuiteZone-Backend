@@ -66,7 +66,7 @@ const Place = mongoose.model('Place', new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }   
 }));   
   const DeviceSchema = new mongoose.Schema({ 
-   pushToken: { type: String, required: true, unique: true },
+   pushToken: { type: String },
   deviceName: String,
   lat: { type: Number, default: null },
   lng: { type: Number, default: null },
@@ -368,6 +368,9 @@ io.on('connection', async (socket) => {
   });   
 
 socket.on('register-device', async (data) => { 
+    // أضيفي هذا السطر للتأكد من وصول التوكن للسيرفر
+    console.log("📥 Received registration data:", data);
+
     const { pushToken, deviceName, lat, lng, noiseLevel } = data; 
 
     try {
@@ -382,18 +385,19 @@ socket.on('register-device', async (data) => {
             updateFields.lastLocationUpdate = new Date();
         }
 
-        // ✅ التعديل: الحفظ في قاعدة البيانات بناءً على الـ PushToken 
-        // إذا لم يوجد توكن، نستخدم معرف السوكيت مؤقتاً أو نكتفي بالتحديث في الذاكرة
+        // 🚨 التصحيح الأهم: التأكد من وجود توكن قبل محاولة الحفظ
         if (pushToken) {
-            await Device.findOneAndUpdate( 
-                { pushToken: pushToken },   // البحث بالتوكن
+            const savedDevice = await Device.findOneAndUpdate( 
+                { pushToken: pushToken },
                 updateFields,
-                { upsert: true, new: true } // إذا لم يجد الجهاز، يقوم بإنشائه (Upsert)
+                { upsert: true, new: true, setDefaultsOnInsert: true } 
             ); 
-            console.log(`💾 Device updated in MongoDB: ${deviceName}`);
+            console.log(`💾 Device saved/updated in MongoDB: ${savedDevice.deviceName}`);
+        } else {
+            console.log("⚠️ No pushToken provided, device only added to active list (Memory)");
         }
 
-        // 3. إضافة الجهاز لقائمة الرادار النشط (دائماً)
+        // تحديث قائمة الرادار (الذاكرة)
         activeDevices.set(socket.id, { 
             socketId: socket.id, 
             pushToken: pushToken || null, 
@@ -403,32 +407,12 @@ socket.on('register-device', async (data) => {
             noiseLevel: noiseLevel || 0 
         });
 
-        // 4. تحديث جميع المستخدمين
         io.emit('update-device-list', Array.from(activeDevices.values()));
 
     } catch (err) { 
-        console.log('❌ خطأ في تسجيل الجهاز:', err.message); 
+        console.log('❌ خطأ في سجل MongoDB:', err.message); 
     } 
 });
-  // ✅ تم نقل هذا الجزء للداخل ليعمل بشكل صحيح
-  socket.on('update-location', async (data) => {
-    const { pushToken, lat, lng } = data;
-    if (!pushToken || lat === undefined || lng === undefined) return;
-    try {
-      await Device.findOneAndUpdate(
-        { pushToken },
-        { lat: parseFloat(lat), lng: parseFloat(lng), lastLocationUpdate: new Date(), lastActive: new Date() }
-      );
-      const device = activeDevices.get(socket.id);
-      if (device) {
-        device.lat = parseFloat(lat);
-        device.lng = parseFloat(lng);
-        activeDevices.set(socket.id, device);
-      }
-    } catch (err) {
-      console.log('❌ خطأ في تحديث الموقع:', err.message);
-    }
-  });
 
   socket.on('disconnect', () => {   
     activeDevices.delete(socket.id);   
