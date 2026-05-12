@@ -393,7 +393,7 @@ socket.on('register-device', async (data) => {
         const savedDevice = await Device.findOneAndUpdate( 
             { deviceName: deviceName }, // البحث بالاسم (أو Unique ID لو عندك)
             updateFields,
-            { upsert: true, new: true, setDefaultsOnInsert: true } 
+           { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         ); 
         
         console.log(`💾 Device saved/updated in MongoDB: ${savedDevice.deviceName}`);
