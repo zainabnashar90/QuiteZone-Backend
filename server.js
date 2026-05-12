@@ -368,7 +368,6 @@ io.on('connection', async (socket) => {
   });   
 
 socket.on('register-device', async (data) => { 
-    // 1. تفكيك البيانات القادمة من الموبايل
     const { pushToken, deviceName, lat, lng, noiseLevel } = data; 
 
     try {
@@ -383,26 +382,28 @@ socket.on('register-device', async (data) => {
             updateFields.lastLocationUpdate = new Date();
         }
 
-        // 2. تحديث قاعدة البيانات (لإرسال الإشعارات لاحقاً)
-        if (pushToken && Expo.isExpoPushToken(pushToken)) {
+        // ✅ التعديل: الحفظ في قاعدة البيانات بناءً على الـ PushToken 
+        // إذا لم يوجد توكن، نستخدم معرف السوكيت مؤقتاً أو نكتفي بالتحديث في الذاكرة
+        if (pushToken) {
             await Device.findOneAndUpdate( 
-                { pushToken: pushToken },  
+                { pushToken: pushToken },   // البحث بالتوكن
                 updateFields,
-                { upsert: true, new: true } 
+                { upsert: true, new: true } // إذا لم يجد الجهاز، يقوم بإنشائه (Upsert)
             ); 
+            console.log(`💾 Device updated in MongoDB: ${deviceName}`);
         }
 
-        // 3. إضافة الجهاز لقائمة الرادار "النشط" في الذاكرة
+        // 3. إضافة الجهاز لقائمة الرادار النشط (دائماً)
         activeDevices.set(socket.id, { 
             socketId: socket.id, 
             pushToken: pushToken || null, 
             deviceName: deviceName || 'جهاز مجهول',
             lat: updateFields.lat || null,
             lng: updateFields.lng || null,
-            noiseLevel: noiseLevel || 0 // القيمة التي ستظهر بجانب الاسم في الرادار
+            noiseLevel: noiseLevel || 0 
         });
 
-        // 4. إرسال التحديث لكل المتصلين (ليروا الجهاز الجديد والـ dB الخاص به)
+        // 4. تحديث جميع المستخدمين
         io.emit('update-device-list', Array.from(activeDevices.values()));
 
     } catch (err) { 
@@ -602,12 +603,35 @@ app.get('/api/heatmap', async (req, res) => {
 });   
    
 // ==========================================   
-// GET /api/devices   
+// GET /api/devices - النسخة المصححة للقراءة من القاعدة
 // ==========================================   
-app.get('/api/devices', (req, res) => {   
-  res.json({ success: true, devices: Array.from(activeDevices.values()) });   
-});   
-    
+app.get('/api/devices', async (req, res) => {   
+  try {
+    // 1. جلب كل الأجهزة من قاعدة البيانات
+    const allDevices = await Device.find(); 
+
+    // 2. دمج حالة "النشاط" من الذاكرة المؤقتة (activeDevices)
+    const devicesWithStatus = allDevices.map(device => {
+      // تحويل الوثيقة من Mongoose إلى كائن عادي
+      const deviceObj = device.toObject();
+      
+      // البحث إذا كان الجهاز متصلاً الآن عبر السوكيت
+      const isActive = Array.from(activeDevices.values()).find(d => d.pushToken === device.pushToken);
+      
+      return {
+        ...deviceObj,
+        status: isActive ? 'online' : 'offline',
+        // إذا كان نشطاً نأخذ مستوى الضجيج اللحظي، وإلا نضعه 0
+        noiseLevel: isActive ? isActive.noiseLevel : 0 
+      };
+    });
+
+    res.json({ success: true, devices: devicesWithStatus });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // ==========================================  
 // POST /api/magic-wand - النسخة النهائية المصححة
