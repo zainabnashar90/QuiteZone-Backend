@@ -269,9 +269,7 @@ function classifyNoise(noiseLevel, audioFeatures = [], aiSource = null) {
   if (noiseLevel > 95)   
     return { detectedType: 'ضجيج خطير ⚠️', isEmergency: true };   
 
-  // 3. الضجيج الذي يستحق إرسال إشعار (رفعنا الحد من 75 إلى 85)
-  // تم إضافة شرط إضافي (aiSource) لضمان أن الصوت ليس مجرد "نويز" عشوائي
-  if (noiseLevel > 85 && aiSource && aiSource !== 'هدوء نسبي 🌿')   
+  if (noiseLevel > 70 && aiSource && aiSource !== 'هدوء نسبي 🌿')   
     return { detectedType: aiSource || 'ضجيج مرتفع 🔊', isEmergency: true };   
     
   // أي شيء أقل من ذلك يعتبر هدوء ولن يرسل إشعاراً (isEmergency: false)
@@ -619,8 +617,8 @@ app.get('/api/devices', (req, res) => {
 app.post('/api/magic-wand', async (req, res) => {  
   try {  
     const { latitude, longitude, maxDistance } = req.body;  
-    // 10 كم كحد افتراضي لضمان ظهور نتائج أثناء التجربة
     const searchRadius = maxDistance ? parseFloat(maxDistance) : 10;  
+console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search radius: ${searchRadius}km`);
   
     if (!latitude || !longitude) {  
       return res.json({ success: false, message: 'الموقع الجغرافي غير متوفر.' });  
@@ -629,40 +627,50 @@ app.post('/api/magic-wand', async (req, res) => {
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
   
-    // 1. جلب المناطق الهادئة (رفعنا الحد لـ 65 ديسيبل ليكون البحث مرناً)
-    const quietPlaces = await Place.find({ noiseLevel: { $lte: 65 } });  
+    // 🔥 إضافة فلتر الزمن: جلب بيانات آخر 12 ساعة فقط لضمان الواقعية
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+
+    // 1. جلب المناطق الهادئة والحديثة فقط
+    const quietPlaces = await Place.find({ 
+      noiseLevel: { $lte: 65 },
+      updatedAt: { $gte: twelveHoursAgo } // لضمان عدم جلب سجلات قديمة
+    });  
   
     if (quietPlaces.length === 0) {  
-      return res.json({ success: false, message: 'لا توجد تسجيلات لهدوء في قاعدة البيانات حالياً.' });  
+      return res.json({ success: false, message: 'لا توجد تسجيلات حديثة لهدوء في المنطقة حالياً.' });  
     }  
   
-    // 2. فلترة الأماكن القريبة وحساب المسافة بدقة
+    // 2. فلترة الأماكن القريبة
     const nearbyPlaces = quietPlaces.map(place => {
       const d = calculateDistance(userLat, userLng, place.location.lat, place.location.lng);
       return { ...place._doc, distance: parseFloat(d) };
     }).filter(p => p.distance <= searchRadius);
   
     if (nearbyPlaces.length === 0) {  
-      return res.json({ success: false, message: `لا يوجد هدوء مرصود ضمن نطاق ${searchRadius} كم.` });  
+      return res.json({ success: false, message: `لا يوجد هدوء مرصود ضمن نطاق ${searchRadius} كم حالياً.` });  
     }  
   
-    // 3. اختيار الأهدأ (الأقل ديسيبل) من بين القريبين
+    // 3. اختيار الأهدأ
     const bestPlace = nearbyPlaces.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];  
 
-    // 4. جلب الاسم الحقيقي وتحسينه
+    // 4. جلب الاسم
     let realName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
     let finalAreaName = "منطقة هادئة";
-    
     if (realName && !realName.includes("📍")) {
         let parts = realName.split(/[،,]/).map(p => p.trim());
-        // نختار أول جزء نصي يعبر عن اسم المكان
         finalAreaName = parts.find(p => isNaN(p.charAt(0)) && p.length > 3) || parts[0];
     }
 
-    // 5. التنسيق الزمني
+    // 5. التنسيق الزمني (توقيت دمشق)
     const timeFormatted = new Date(bestPlace.updatedAt).toLocaleTimeString('ar-SY', { 
         hour: '2-digit', 
-        minute: '2-digit' 
+        minute: '2-digit',
+        timeZone: 'Asia/Damascus',
+        hour12: true 
+    });
+
+    const dateFormatted = new Date(bestPlace.updatedAt).toLocaleDateString('ar-SY', {
+        timeZone: 'Asia/Damascus'
     });
 
     res.json({   
@@ -672,7 +680,7 @@ app.post('/api/magic-wand', async (req, res) => {
         name: finalAreaName, 
         noiseLevel: bestPlace.noiseLevel,
         distance: bestPlace.distance.toFixed(2),
-        observedIn: `رصد في: ${new Date(bestPlace.updatedAt).toLocaleDateString('ar-SY')}`,
+        observedIn: `رصد بتاريخ: ${dateFormatted}`,
         time: `الساعة: ${timeFormatted}`,
         location: { lat: bestPlace.location.lat, lng: bestPlace.location.lng }
       }   
