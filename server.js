@@ -411,41 +411,64 @@ socket.on('register-device', async (data) => {
     } 
 });
   // ✅ تم نقل هذا الجزء للداخل ليعمل بشكل صحيح
-  socket.on('update-location', async (data) => {
+ socket.on('update-location', async (data) => {
     const { pushToken, lat, lng } = data;
     if (!pushToken || lat === undefined || lng === undefined) return;
+
     try {
+      const uLat = parseFloat(lat);
+      const uLng = parseFloat(lng);
+
+      // 1. التحديث المعتاد في قاعدة البيانات (كما فعلتِ أنتِ)
       await Device.findOneAndUpdate(
         { pushToken },
-        { lat: parseFloat(lat), lng: parseFloat(lng), lastLocationUpdate: new Date(), lastActive: new Date() }
+        { lat: uLat, lng: uLng, lastLocationUpdate: new Date(), lastActive: new Date() },
+        { upsert: true }
       );
+
+      // تحديث القائمة النشطة للرادار
       const device = activeDevices.get(socket.id);
       if (device) {
-        device.lat = parseFloat(lat);
-        device.lng = parseFloat(lng);
+        device.lat = uLat;
+        device.lng = uLng;
         activeDevices.set(socket.id, device);
+        io.emit('update-device-list', Array.from(activeDevices.values()));
       }
+
+      // 2. 🔥 ذكاء الخلفية (الجديد): التحقق من وجود خطر ضجيج قريب
+      // نبحث عن أماكن فيها ضجيج عالي جداً (>85dB) تم رصدها مؤخراً (آخر ساعة)
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const noisyHotspot = await Place.findOne({
+        noiseLevel: { $gt: 85 },
+        updatedAt: { $gte: oneHourAgo }
+      });
+
+      if (noisyHotspot) {
+        // حساب المسافة بين المستخدم ومنطقة الضجيج
+        const distance = calculateDistance(uLat, uLng, noisyHotspot.location.lat, noisyHotspot.location.lng);
+        
+        // إذا كان المستخدم ضمن 200 متر من الضجيج
+        if (parseFloat(distance) < 0.2) {
+          const now = Date.now();
+          const lastSent = lastPushSentTime.get(pushToken) || 0;
+
+          // منع إزعاج المستخدم (إرسال إشعار واحد كل دقيقة كحد أقصى)
+          if (now - lastSent > PUSH_COOLDOWN_MS) {
+            await sendPushNotification(
+              pushToken,
+              "🚨 منطقة ضجيج مرتفع!",
+              `انتبه، أنت تقترب من مكان فيه ضوضاء عالية (${noisyHotspot.noiseLevel} dB).`
+            );
+            lastPushSentTime.set(pushToken, now);
+            console.log(`🔔 Background alert sent to: ${pushToken}`);
+          }
+        }
+      }
+
     } catch (err) {
-      console.log('❌ خطأ في تحديث الموقع:', err.message);
+      console.log('❌ خطأ في تحديث الموقع أو معالجة الخلفية:', err.message);
     }
   });
-
-  socket.on('disconnect', () => {   
-    activeDevices.delete(socket.id);   
-    console.log(`📴 انقطع الاتصال (ID: ${socket.id})`);   
-    io.emit('update-device-list', Array.from(activeDevices.values()));   
-  });   
-  socket.on('update-noise-level', (data) => {
-    const { noiseLevel } = data;
-    const device = activeDevices.get(socket.id);
-    if (device) {
-        device.noiseLevel = noiseLevel;
-        activeDevices.set(socket.id, device);
-        
-        // إرسال التحديث للجميع ليتغير الرقم في الرادار فوراً
-        io.emit('update-device-list', Array.from(activeDevices.values()));
-    }
-});
 }); // نهاية الـ io.on
    
 // ==========================================   
