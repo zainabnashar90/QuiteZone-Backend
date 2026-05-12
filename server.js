@@ -608,40 +608,45 @@ app.get('/api/devices', (req, res) => {
   res.json({ success: true, devices: Array.from(activeDevices.values()) });   
 });   
     
+
 // ==========================================  
-// POST /api/magic-wand - خوارزمية أهدأ منطقة (نسخة الأطروحة النهائية)
+// POST /api/magic-wand - النسخة النهائية المصححة
 // ==========================================  
-// ==========================================  
-// POST /api/magic-wand - خوارزمية أهدأ منطقة (نسخة محسنة)
-// ==========================================  
-app.post('/api/magic-wand', async (req, res) => {  
+app.post('/api/magic-wand', async (req, res) => {   
   try {  
     const { latitude, longitude, maxDistance } = req.body;  
-    const searchRadius = maxDistance ? parseFloat(maxDistance) : 10;  
-console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search radius: ${searchRadius}km`);
-  
+    
     if (!latitude || !longitude) {  
       return res.json({ success: false, message: 'الموقع الجغرافي غير متوفر.' });  
-    }  
-  
+    }
+
+    // ✅ تصحيح: تعريف المتغيرات أولاً
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
-  
-    // 🔥 إضافة فلتر الزمن: جلب بيانات آخر 12 ساعة فقط لضمان الواقعية
-    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const searchRadius = maxDistance ? parseFloat(maxDistance) : 10;  
 
-    // 1. جلب المناطق الهادئة والحديثة فقط
+    // ✅ الآن يمكنك الطباعة بأمان
+    console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search radius: ${searchRadius}km`);
+
+    // 🔥 فلتر الزمن (ملاحظة: إذا لم تظهر نتائج، جربي زيادة الـ 12 لـ 48 للتأكد)
+    const timeLimit = new Date(Date.now() - 12 * 60 * 60 * 1000);
+
+    // 1. جلب المناطق الهادئة (أقل من 65 ديسيبل) والحديثة
     const quietPlaces = await Place.find({ 
       noiseLevel: { $lte: 65 },
-      updatedAt: { $gte: twelveHoursAgo } // لضمان عدم جلب سجلات قديمة
+      updatedAt: { $gte: timeLimit } 
     });  
   
-    if (quietPlaces.length === 0) {  
-      return res.json({ success: false, message: 'لا توجد تسجيلات حديثة لهدوء في المنطقة حالياً.' });  
+    if (!quietPlaces || quietPlaces.length === 0) {  
+      return res.json({ 
+        success: false, 
+        message: 'لا توجد تسجيلات هدوء حديثة (آخر 12 ساعة). جرب التسجيل أولاً!' 
+      });  
     }  
   
-    // 2. فلترة الأماكن القريبة
+    // 2. فلترة الأماكن القريبة باستخدام مصفوفة المسافات
     const nearbyPlaces = quietPlaces.map(place => {
+      // تأكدي أن دالة calculateDistance معرفة عندك في الملف
       const d = calculateDistance(userLat, userLng, place.location.lat, place.location.lng);
       return { ...place._doc, distance: parseFloat(d) };
     }).filter(p => p.distance <= searchRadius);
@@ -650,18 +655,22 @@ console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search ra
       return res.json({ success: false, message: `لا يوجد هدوء مرصود ضمن نطاق ${searchRadius} كم حالياً.` });  
     }  
   
-    // 3. اختيار الأهدأ
+    // 3. اختيار الأهدأ (ترتيب تصاعدي حسب مستوى الضجيج)
     const bestPlace = nearbyPlaces.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];  
 
-    // 4. جلب الاسم
-    let realName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
+    // 4. جلب الاسم (Reverse Geocoding)
     let finalAreaName = "منطقة هادئة";
-    if (realName && !realName.includes("📍")) {
-        let parts = realName.split(/[،,]/).map(p => p.trim());
-        finalAreaName = parts.find(p => isNaN(p.charAt(0)) && p.length > 3) || parts[0];
+    try {
+        let realName = await reverseGeocode(bestPlace.location.lat, bestPlace.location.lng);
+        if (realName && !realName.includes("📍")) {
+            let parts = realName.split(/[،,]/).map(p => p.trim());
+            finalAreaName = parts.find(p => isNaN(p.charAt(0)) && p.length > 3) || parts[0];
+        }
+    } catch (e) {
+        console.log("Geocoding failed, using default name");
     }
 
-    // 5. التنسيق الزمني (توقيت دمشق)
+    // 5. التنسيق الزمني
     const timeFormatted = new Date(bestPlace.updatedAt).toLocaleTimeString('ar-SY', { 
         hour: '2-digit', 
         minute: '2-digit',
@@ -687,10 +696,10 @@ console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search ra
     });  
   
   } catch (err) {  
-    res.status(500).json({ success: false, message: 'حدث خطأ في الخوارزمية.' });  
+    console.error("❌ Magic Wand Error:", err); // طباعة الخطأ الحقيقي في الـ Terminal
+    res.status(500).json({ success: false, message: 'حدث خطأ في معالجة البيانات.' });  
   }  
 });
-   
 // ==========================================   
 // POST /api/places   
 // ==========================================   
