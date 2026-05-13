@@ -493,24 +493,24 @@ app.post('/api/analyze-audio', async (req, res) => {
         }   
       }   
     
-      // 2. إرسال للأجهزة القريبة (بث جماعي) - فقط عند الضجيج
-      await broadcastNotification(title, body, {    
-        type: 'NOISE_ALERT',    
-        lat: location.lat,    
-        lng: location.lng    
-      }, pushToken, location.lat, location.lng, 0.3);    
-    
-      io.emit('collective-noise-alert', { location, noiseLevel, noiseType: detectedType, address });   
-    } else {
-      // رسالة اختيارية في الـ console للتأكد من أن السيرفر يعمل لكنه لا يرسل إشعارات
-      console.log(`🌿 المنطقة هادئة (${noiseLevel} dB)، لا داعي لإرسال إشعار.`);
-    }   
-    
-    res.json({ success: true, detectedType: finalNoiseType, isAlert: isEmergency, address });   
-  } catch (err) {   
-    res.status(500).json({ success: false, error: err.message });   
-  }   
-});
+          // 2. إرسال للأجهزة القريبة (بث جماعي) - فقط عند الضجيج
+          await broadcastNotification(title, body, {    
+            type: 'NOISE_ALERT',    
+            lat: location.lat,    
+            lng: location.lng    
+          }, pushToken, location.lat, location.lng, 0.3);    
+        
+          io.emit('collective-noise-alert', { location, noiseLevel, noiseType: detectedType, address });   
+        } else {
+          // رسالة اختيارية في الـ console للتأكد من أن السيرفر يعمل لكنه لا يرسل إشعارات
+          console.log(`🌿 المنطقة هادئة (${noiseLevel} dB)، لا داعي لإرسال إشعار.`);
+        }   
+        
+        res.json({ success: true, detectedType: finalNoiseType, isAlert: isEmergency, address });   
+      } catch (err) {   
+        res.status(500).json({ success: false, error: err.message });   
+      }   
+    });
 // ==========================================   
 // GET /api/stats   
 // ==========================================   
@@ -616,7 +616,7 @@ app.get('/api/devices', async (req, res) => {
 });
 
 // ==========================================  
-// POST /api/magic-wand - النسخة النهائية المصححة
+// POST /api/magic-wand  
 // ==========================================  
 app.post('/api/magic-wand', async (req, res) => {   
   try {  
@@ -625,24 +625,15 @@ app.post('/api/magic-wand', async (req, res) => {
     if (!latitude || !longitude) {  
       return res.json({ success: false, message: 'الموقع الجغرافي غير متوفر.' });  
     }
-
-    // ✅ تصحيح: تعريف المتغيرات أولاً
     const userLat = parseFloat(latitude);  
     const userLng = parseFloat(longitude);  
     const searchRadius = maxDistance ? parseFloat(maxDistance) : 10;  
-
-    // ✅ الآن يمكنك الطباعة بأمان
     console.log(`✨ Magic Wand used by user at [${userLat}, ${userLng}] - Search radius: ${searchRadius}km`);
-
-    // 🔥 فلتر الزمن (ملاحظة: إذا لم تظهر نتائج، جربي زيادة الـ 12 لـ 48 للتأكد)
     const timeLimit = new Date(Date.now() - 12 * 60 * 60 * 1000);
-
-    // 1. جلب المناطق الهادئة (أقل من 65 ديسيبل) والحديثة
     const quietPlaces = await Place.find({ 
       noiseLevel: { $lte: 65 },
       updatedAt: { $gte: timeLimit } 
     });  
-  
     if (!quietPlaces || quietPlaces.length === 0) {  
       return res.json({ 
         success: false, 
@@ -726,6 +717,19 @@ app.post('/api/places', async (req, res) => {
   }   
 });   
    
+
+
+// ==========================================    
+// GET /api/places - جلب قائمة الأماكن المسجلة
+// ==========================================    
+app.get('/api/places', async (req, res) => {   
+  try {   
+    const places = await Place.find().sort({ updatedAt: -1 }).limit(20);   
+    res.json({ success: true, places });   
+  } catch (err) {   
+    res.status(500).json({ success: false, error: err.message });   
+  }   
+});
 // ==========================================   
 // GET /api/ping   
 // ==========================================   
@@ -774,3 +778,4 @@ app.post('/api/broadcast-alert', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
