@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const Place = require('../models/Place'); // تأكدي من مسار موديل البيانات الخاص بكِ
+const Place = require('../models/Place'); 
 
 // المسار الذكي للبحث عن أهدأ منطقة
 router.get('/recommend-path', async (req, res) => {
@@ -14,7 +14,7 @@ router.get('/recommend-path', async (req, res) => {
         const quietOptions = noiseSpots.filter(spot => spot.noiseLevel < 60);
 
         if (quietOptions.length === 0) {
-            return res.json({ success: false, message: "لا توجد مسارات هادئة مرصودة حالياً." });
+             return res.json({ success: false, message: "لا توجد مسارات هادئة مرصودة حالياً." });
         }
 
         const bestRoute = quietOptions.sort((a, b) => a.noiseLevel - b.noiseLevel)[0];
